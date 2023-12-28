@@ -1,0 +1,24 @@
+[package]
+name = "suwi"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+path="src/lib.rs"
+
+[[bin]]
+path="src/main.rs"
+name="suwi"
+
+[dependencies]
+anyhow = { version = "1.0.77", features = ["backtrace"] }
+axum = { version = "0.7.2", features = ["http2"] }
+clap = { version = "4.4.11", features = ["derive"] }
+config = "0.13.4"
+serde = { version = "1.0.193", features = ["derive"] }
+serde_yaml = "0.9.29"
+thiserror = "1.0.52"
+tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros"] }
+xdg = "2.5.2"
