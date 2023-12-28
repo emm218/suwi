@@ -18,11 +18,12 @@ use std::io;
 
 use axum::routing::get;
 use tokio::net::TcpListener;
+use tower_http::trace::TraceLayer;
 
 pub mod configuration;
 
 pub async fn run(listener: TcpListener) -> io::Result<()> {
-    let app = get(|| async { "Hello, World!" });
+    let app = get(|| async { "Hello, World!" }).layer(TraceLayer::new_for_http());
 
     axum::serve(listener, app).await
 }

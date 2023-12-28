@@ -19,6 +19,9 @@ use std::{fs::File, path::PathBuf};
 use clap::Parser;
 use suwi::configuration::{get_config, Settings};
 use tokio::net::TcpListener;
+use tracing::{info, subscriber::set_global_default, warn};
+use tracing_log::LogTracer;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 struct Cli {
@@ -28,6 +31,16 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    LogTracer::init()?;
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .finish();
+
+    set_global_default(subscriber)?;
+
     let opts = Cli::try_parse()?;
     let xdg_dirs = xdg::BaseDirectories::with_prefix("suwi")?;
 
@@ -40,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
 
     if config_path.is_none() {
         let config_path = xdg_dirs.place_config_file("config.yaml")?;
-        eprintln!(
+        warn!(
             "no config file found, writing default config to {}",
             config_path.to_string_lossy()
         );
@@ -53,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = TcpListener::bind(settings.socket_addr()).await?;
 
-    println!("listening on {}", listener.local_addr()?);
+    info!("listening on {}", listener.local_addr()?);
 
     Ok(suwi::run(listener).await?)
 }

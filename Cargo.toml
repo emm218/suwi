@@ -21,4 +21,8 @@ serde = { version = "1.0.193", features = ["derive"] }
 serde_yaml = "0.9.29"
 thiserror = "1.0.52"
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.5.0", features = ["cors", "trace"] }
+tracing = "0.1.40"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 xdg = "2.5.2"
