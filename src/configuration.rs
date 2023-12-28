@@ -19,40 +19,90 @@ use std::{
     path::PathBuf,
 };
 
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-pub struct Settings {
-    pub port: u16,
+pub struct AppSettings {
     pub host: IpAddr,
+    pub port: u16,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            port: 8000,
-            host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-        }
-    }
-}
-
-impl Settings {
+impl AppSettings {
     pub fn socket_addr(&self) -> SocketAddr {
         std::net::SocketAddr::new(self.host, self.port)
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct DatabaseSettings {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(skip_serializing)]
+    pub password: Option<SecretString>,
+    pub name: String,
+}
+
+impl DatabaseSettings {
+    pub fn connection_string(&self) -> SecretString {
+        match &self.password {
+            None => format!(
+                "postgres://{}@{}:{}/{}",
+                self.username, self.host, self.port, self.name
+            ),
+            Some(p) => format!(
+                "postgres://{}:{}@{}:{}/{}",
+                self.username,
+                p.expose_secret(),
+                self.host,
+                self.port,
+                self.name
+            ),
+        }
+        .into()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Settings {
+    pub application: AppSettings,
+    pub database: DatabaseSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            application: AppSettings {
+                port: 8000,
+                host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            },
+            database: DatabaseSettings {
+                username: "postgres".to_string(),
+                password: None,
+                port: 5432,
+                host: "127.0.0.1".to_string(),
+                name: "suwi".to_string(),
+            },
+        }
+    }
+}
+
 pub fn get_config(path: Option<PathBuf>) -> Result<Settings, config::ConfigError> {
     let mut builder = config::Config::builder()
-        .set_default("port", 8000)?
-        .set_default("host", "127.0.0.1")?;
+        .set_default("application.port", 8000)?
+        .set_default("application.host", "127.0.0.1")?
+        .set_default("database.port", 5432)?
+        .set_default("database.host", "127.0.0.1")?
+        .set_default("database.username", "postgres")?
+        .set_default("database.name", "suwi")?;
 
     builder = if let Some(path) = path {
         builder.add_source(config::File::from(path))
     } else {
         builder
     }
-    .add_source(config::Environment::with_prefix("suwi"));
+    .add_source(config::Environment::with_prefix("suwi").separator("_"));
 
     builder.build()?.try_deserialize()
 }

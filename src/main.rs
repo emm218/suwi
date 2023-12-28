@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     let settings = get_config(config_path)?;
 
-    let listener = TcpListener::bind(settings.socket_addr()).await?;
+    let listener = TcpListener::bind(settings.application.socket_addr()).await?;
 
     info!("listening on {}", listener.local_addr()?);
 
