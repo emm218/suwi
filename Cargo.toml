@@ -14,9 +14,12 @@ name="suwi"
 
 [dependencies]
 anyhow = { version = "1.0.77", features = ["backtrace"] }
+argon2 = { version = "0.5.2", features = ["std"] }
 axum = { version = "0.7.2", features = ["http2"] }
+chrono = "0.4.31"
 clap = { version = "4.4.11", features = ["derive"] }
 config = "0.13.4"
+rand = "0.8.5"
 secrecy = { version = "0.8.0", features = ["serde"] }
 serde = { version = "1.0.193", features = ["derive"] }
 serde_yaml = "0.9.29"
@@ -26,4 +29,9 @@ tower-http = { version = "0.5.0", features = ["cors", "trace"] }
 tracing = "0.1.40"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+uuid = "1.6.1"
 xdg = "2.5.2"
+
+[dependencies.sqlx]
+version = "0.7.3"
+features = ["runtime-tokio", "tls-native-tls", "macros", "postgres", "migrate", "chrono", "uuid"]

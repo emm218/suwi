@@ -17,11 +17,15 @@
 use std::{fs::File, path::PathBuf};
 
 use clap::Parser;
-use suwi::configuration::{get_config, Settings};
+use secrecy::ExposeSecret;
+use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tracing::{info, subscriber::set_global_default, warn};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
+
+mod configuration;
+use configuration::{get_config, Settings};
 
 #[derive(Parser)]
 struct Cli {
@@ -47,8 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let config_path = opts.config.or_else(|| {
         ["config.yaml", "config.toml", "config.ini", "config.json"]
             .iter()
-            .flat_map(|p| xdg_dirs.find_config_file(p))
-            .next()
+            .find_map(|p| xdg_dirs.find_config_file(p))
     });
 
     if config_path.is_none() {
@@ -65,8 +68,9 @@ async fn main() -> anyhow::Result<()> {
     let settings = get_config(config_path)?;
 
     let listener = TcpListener::bind(settings.application.socket_addr()).await?;
-
     info!("listening on {}", listener.local_addr()?);
 
-    Ok(suwi::run(listener).await?)
+    let pool = PgPool::connect(settings.database.connection_string().expose_secret()).await?;
+
+    Ok(suwi::run(listener, pool).await?)
 }
