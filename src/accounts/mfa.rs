@@ -27,8 +27,8 @@ pub enum Error {
     InvalidOtp(Token),
     #[error("invalid mfa token")]
     InvalidToken,
-    #[error("otp secret is null")]
-    MfaDisabled,
+    #[error("totp secret is null")]
+    InvalidSecret,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -84,7 +84,7 @@ pub async fn verify_mfa_attempt(
     .ok_or(Error::InvalidToken)
     .map(|row| (row.mfa_secret.map(Into::into), row.valid_until, row.user_id))?;
 
-    let secret = secret.ok_or(Error::MfaDisabled)?;
+    let secret = secret.ok_or(Error::InvalidSecret)?;
 
     if chrono::Local::now() > valid_until {
         Err(Error::ExpiredToken)

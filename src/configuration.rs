@@ -23,6 +23,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct EndpointSettings {
     pub host: IpAddr,
     pub port: u16,
@@ -34,7 +35,17 @@ impl EndpointSettings {
     }
 }
 
+impl Default for EndpointSettings {
+    fn default() -> Self {
+        Self {
+            port: 8000,
+            host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct DatabaseSettings {
     pub host: String,
     pub port: u16,
@@ -42,6 +53,18 @@ pub struct DatabaseSettings {
     #[serde(skip_serializing)]
     pub password: Option<SecretString>,
     pub name: String,
+}
+
+impl Default for DatabaseSettings {
+    fn default() -> Self {
+        Self {
+            username: "postgres".to_string(),
+            password: None,
+            port: 5432,
+            host: "127.0.0.1".to_string(),
+            name: "suwi".to_string(),
+        }
+    }
 }
 
 impl DatabaseSettings {
@@ -64,33 +87,12 @@ impl DatabaseSettings {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Settings {
     pub endpoint: EndpointSettings,
     pub database: DatabaseSettings,
     pub application: suwi::Settings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            endpoint: EndpointSettings {
-                port: 8000,
-                host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            },
-            database: DatabaseSettings {
-                username: "postgres".to_string(),
-                password: None,
-                port: 5432,
-                host: "127.0.0.1".to_string(),
-                name: "suwi".to_string(),
-            },
-            application: suwi::Settings {
-                username_limit: 100,
-            },
-        }
-    }
 }
 
 pub fn get_config(path: Option<PathBuf>) -> Result<Settings, config::ConfigError> {

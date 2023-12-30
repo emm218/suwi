@@ -50,8 +50,17 @@ use accounts::{
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 pub struct Settings {
     pub username_limit: usize,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            username_limit: 100,
+        }
+    }
 }
 
 type SuwiState = axum::extract::State<(PgPool, Arc<Settings>)>;
@@ -85,7 +94,6 @@ where
                 return Ok(Self(payload));
             }
         }
-
         Err(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())
     }
 }
