@@ -67,10 +67,10 @@ async fn main() -> anyhow::Result<()> {
 
     let settings = get_config(config_path)?;
 
-    let listener = TcpListener::bind(settings.application.socket_addr()).await?;
+    let listener = TcpListener::bind(settings.endpoint.socket_addr()).await?;
     info!("listening on {}", listener.local_addr()?);
 
     let pool = PgPool::connect(settings.database.connection_string().expose_secret()).await?;
 
-    Ok(suwi::run(listener, pool).await?)
+    Ok(suwi::run(listener, pool, settings.application).await?)
 }

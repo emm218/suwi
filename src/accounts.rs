@@ -20,20 +20,20 @@ use argon2::{
 };
 use rand::thread_rng;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
-pub struct Credentials {
-    pub username: String,
-    pub password: SecretString,
-}
+use crate::{spawn_blocking_with_tracing, Settings};
+
+pub mod mfa;
+pub use mfa::verify_mfa_challenge;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
     #[error("username already taken")]
     UsernameTaken,
+    #[error("{0}")]
+    InvalidUsername(String),
     #[error(transparent)]
     PasswordHash(#[from] password_hash::Error),
     #[error(transparent)]
@@ -63,15 +63,28 @@ pub async fn create_account(
     username: &str,
     password: &SecretString,
     pool: &PgPool,
+    settings: &Settings,
 ) -> Result<(), CreateError> {
+    if username.is_empty() {
+        return Err(CreateError::InvalidUsername(
+            "username cannot be empty".to_string(),
+        ));
+    }
+
+    if username.len() > settings.username_limit {
+        return Err(CreateError::InvalidUsername(format!(
+            "username cannot be over {} characters",
+            settings.username_limit
+        )));
+    }
+
     let hash = hash_password(password)?;
 
     sqlx::query!(
-        "INSERT INTO accounts (id, username, password_hash, registered_at) 
-        VALUES (gen_random_uuid(), $1, $2, $3);",
+        "INSERT INTO accounts (username, password_hash, registered_at)
+        VALUES ($1, $2, now());",
         username,
         hash,
-        chrono::Local::now()
     )
     .execute(pool)
     .await?;
@@ -83,6 +96,8 @@ pub async fn create_account(
 pub enum SignInError {
     #[error("invalid credentials")]
     InvalidCredentials,
+    #[error("need otp")]
+    MfaNeeded(Uuid),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -103,14 +118,15 @@ impl From<password_hash::Error> for SignInError {
 async fn get_stored_credentials(
     username: &str,
     pool: &PgPool,
-) -> Result<Option<(Uuid, SecretString)>, sqlx::Error> {
+) -> Result<Option<(Uuid, SecretString, bool)>, sqlx::Error> {
     let row: Option<_> = sqlx::query!(
-        r#"SELECT id, password_hash FROM accounts WHERE username = $1"#,
+        r#"SELECT id, password_hash, mfa_enabled
+        FROM accounts WHERE username = $1"#,
         username
     )
     .fetch_optional(pool)
     .await?
-    .map(|row| (row.id, row.password_hash.into()));
+    .map(|row| (row.id, row.password_hash.into(), row.mfa_enabled));
     Ok(row)
 }
 
@@ -130,20 +146,29 @@ pub async fn verify_credentials(
     password: SecretString,
     pool: &PgPool,
 ) -> Result<Uuid, SignInError> {
-    let (user_id, correct_hash) = get_stored_credentials(username, pool)
-        .await?
-        .map(|(id, hash)| (Some(id), hash))
-        .unwrap_or((
-            None,
-            "$argon2id$v=19$m=15000,t=2,p=1$\
-            gZiV/M1gPc22ElAH/Jh1Hw$\
-            CWOrkoo7oJBQ/iyh7uJ0LO2aLEfrHwTWllSAxT0zRno"
-                .to_string()
-                .into(),
-        ));
+    let (user_id, correct_hash, mfa_enabled) =
+        get_stored_credentials(username, pool).await?.map_or(
+            (
+                None,
+                "$argon2id$v=19$m=15000,t=2,p=1$\
+                gZiV/M1gPc22ElAH/Jh1Hw$\
+                CWOrkoo7oJBQ/iyh7uJ0LO2aLEfrHwTWllSAxT0zRno"
+                    .to_string()
+                    .into(),
+                false,
+            ),
+            |(id, hash, mfa)| (Some(id), hash, mfa),
+        );
 
-    crate::spawn_blocking_with_tracing(move || verify_password_hash(&correct_hash, &password))
-        .await??;
+    spawn_blocking_with_tracing(move || verify_password_hash(&correct_hash, &password)).await??;
 
-    user_id.ok_or(SignInError::InvalidCredentials)
+    let user_id = user_id.ok_or(SignInError::InvalidCredentials)?;
+
+    if mfa_enabled {
+        Err(SignInError::MfaNeeded(
+            mfa::mfa_challenge(user_id, pool).await?,
+        ))
+    } else {
+        Ok(user_id)
+    }
 }

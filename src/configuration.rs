@@ -23,12 +23,12 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-pub struct AppSettings {
+pub struct EndpointSettings {
     pub host: IpAddr,
     pub port: u16,
 }
 
-impl AppSettings {
+impl EndpointSettings {
     pub fn socket_addr(&self) -> SocketAddr {
         std::net::SocketAddr::new(self.host, self.port)
     }
@@ -66,14 +66,15 @@ impl DatabaseSettings {
 
 #[derive(Serialize, Deserialize)]
 pub struct Settings {
-    pub application: AppSettings,
+    pub endpoint: EndpointSettings,
     pub database: DatabaseSettings,
+    pub application: suwi::Settings,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            application: AppSettings {
+            endpoint: EndpointSettings {
                 port: 8000,
                 host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             },
@@ -84,18 +85,22 @@ impl Default for Settings {
                 host: "127.0.0.1".to_string(),
                 name: "suwi".to_string(),
             },
+            application: suwi::Settings {
+                username_limit: 100,
+            },
         }
     }
 }
 
 pub fn get_config(path: Option<PathBuf>) -> Result<Settings, config::ConfigError> {
     let mut builder = config::Config::builder()
-        .set_default("application.port", 8000)?
-        .set_default("application.host", "127.0.0.1")?
+        .set_default("endpoint.port", 8000)?
+        .set_default("endpoint.host", "127.0.0.1")?
         .set_default("database.port", 5432)?
         .set_default("database.host", "127.0.0.1")?
         .set_default("database.username", "postgres")?
-        .set_default("database.name", "suwi")?;
+        .set_default("database.name", "suwi")?
+        .set_default("application.username_limit", 100)?;
 
     builder = if let Some(path) = path {
         builder.add_source(config::File::from(path))

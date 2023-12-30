@@ -24,18 +24,30 @@ use axum::{
     routing::post,
     Form, Json, RequestExt,
 };
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::io;
+use std::{io, sync::Arc};
 use tokio::{
     net::TcpListener,
     task::{spawn_blocking, JoinHandle},
 };
 use tower_http::trace::TraceLayer;
 use tracing::{instrument, Span};
+use uuid::Uuid;
 
 mod accounts;
 
-use accounts::{create_account, CreateError as AccountCreateError, Credentials, SignInError};
+use accounts::{
+    create_account, mfa::Error as MfaError, CreateError as AccountCreateError, SignInError,
+};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Settings {
+    pub username_limit: usize,
+}
+
+type SuwiState = axum::extract::State<(PgPool, Arc<Settings>)>;
 
 struct JsonOrForm<T>(T);
 
@@ -71,20 +83,64 @@ where
     }
 }
 
-#[instrument(err, skip(pool))]
-async fn sign_up_handler(
-    State(pool): State<PgPool>,
-    JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
-) -> Result<(), AccountCreateError> {
-    create_account(&username, &password, &pool).await
+#[derive(Debug, Deserialize)]
+pub struct Credentials {
+    pub username: String,
+    pub password: SecretString,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    reason: String,
 }
 
 impl IntoResponse for AccountCreateError {
     fn into_response(self) -> Response {
         match self {
-            AccountCreateError::UsernameTaken => {
-                (StatusCode::BAD_REQUEST, "username taken").into_response()
-            }
+            Self::UsernameTaken | Self::InvalidUsername(_) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    reason: self.to_string(),
+                }),
+            )
+                .into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+}
+
+#[instrument(err, skip(pool, settings))]
+async fn sign_up_handler(
+    State((pool, settings)): SuwiState,
+    JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
+) -> Result<(), AccountCreateError> {
+    create_account(&username, &password, &pool, settings.as_ref()).await
+}
+
+impl IntoResponse for SignInError {
+    fn into_response(self) -> Response {
+        #[derive(Serialize)]
+        struct MfaResponse {
+            reason: &'static str,
+            token: Uuid,
+        }
+
+        match self {
+            Self::InvalidCredentials => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    reason: self.to_string(),
+                }),
+            )
+                .into_response(),
+            Self::MfaNeeded(token) => (
+                StatusCode::BAD_REQUEST,
+                Json(MfaResponse {
+                    reason: "mfa needed",
+                    token,
+                }),
+            )
+                .into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -92,7 +148,7 @@ impl IntoResponse for AccountCreateError {
 
 #[instrument(err, skip(pool))]
 async fn sign_in_handler(
-    State(pool): State<PgPool>,
+    State((pool, _)): SuwiState,
     JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
 ) -> Result<String, SignInError> {
     let id = accounts::verify_credentials(&username, password, &pool).await?;
@@ -100,22 +156,44 @@ async fn sign_in_handler(
     Ok(id.to_string())
 }
 
-impl IntoResponse for SignInError {
+impl IntoResponse for MfaError {
     fn into_response(self) -> Response {
         match self {
-            SignInError::InvalidCredentials => {
-                (StatusCode::BAD_REQUEST, "invalid credentials").into_response()
-            }
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            _ => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    reason: self.to_string(),
+                }),
+            )
+                .into_response(),
         }
     }
 }
 
-pub async fn run(listener: TcpListener, pool: PgPool) -> io::Result<()> {
+// TODO: needs a better name
+#[derive(Debug, Deserialize)]
+pub struct MfaInfo {
+    pub otp: SecretString,
+    pub token: Uuid,
+}
+
+#[instrument(err, skip(pool))]
+async fn verify_mfa_handler(
+    State((pool, _)): SuwiState,
+    JsonOrForm(MfaInfo { otp, token }): JsonOrForm<MfaInfo>,
+) -> Result<String, MfaError> {
+    let id = accounts::verify_mfa_challenge(&otp, &token, &pool).await?;
+
+    Ok(id.to_string())
+}
+
+pub async fn run(listener: TcpListener, pool: PgPool, settings: Settings) -> io::Result<()> {
     let app = axum::Router::new()
         .route("/sign_up", post(sign_up_handler))
         .route("/sign_in", post(sign_in_handler))
-        .with_state(pool)
+        .route("/verify_mfa", post(verify_mfa_handler))
+        .with_state((pool, Arc::new(settings)))
         .layer(TraceLayer::new_for_http());
 
     axum::serve(listener, app).await
