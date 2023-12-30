@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 use secrecy::{Secret, SecretString};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -23,14 +24,40 @@ pub enum Error {
     #[error("mfa token has expired")]
     ExpiredToken,
     #[error("invalid otp")]
-    InvalidOtp,
+    InvalidOtp(Token),
+    #[error("invalid mfa token")]
+    InvalidToken,
     #[error("otp secret is null")]
-    InvalidSecret,
+    MfaDisabled,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
 
-pub async fn mfa_challenge(user: Uuid, pool: &PgPool) -> Result<Uuid, sqlx::Error> {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Token(Uuid);
+
+impl From<Uuid> for Token {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl TryFrom<Vec<u8>> for Token {
+    type Error = uuid::Error;
+
+    fn try_from(mut bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        bytes.resize(16, 0);
+        Uuid::from_slice(&bytes[..16]).map(Into::into)
+    }
+}
+
+impl AsRef<[u8]> for Token {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+pub async fn mfa_challenge(user: Uuid, pool: &PgPool) -> Result<Token, sqlx::Error> {
     sqlx::query_scalar!(
         "INSERT INTO mfa_tokens (user_id, valid_until)
         VALUES ($1, now() + interval '30 minutes') RETURNING id;",
@@ -38,34 +65,33 @@ pub async fn mfa_challenge(user: Uuid, pool: &PgPool) -> Result<Uuid, sqlx::Erro
     )
     .fetch_one(pool)
     .await
+    .map(Into::into)
 }
 
-pub async fn verify_mfa_challenge(
+pub async fn verify_mfa_attempt(
     otp: &SecretString,
-    token: &Uuid,
+    Token(token): &Token,
     pool: &PgPool,
 ) -> Result<Uuid, Error> {
     let (secret, valid_until, user_id) = sqlx::query!(
-        "SELECT mfa_secret, valid_until, user_id
-        FROM mfa_tokens JOIN accounts ON user_id = accounts.id
-        WHERE mfa_tokens.id = $1;",
+        "DELETE FROM mfa_tokens USING accounts
+        WHERE user_id=accounts.id AND mfa_tokens.id=$1
+        RETURNING user_id, mfa_secret, valid_until;",
         token
     )
-    .fetch_one(pool)
-    .await
+    .fetch_optional(pool)
+    .await?
+    .ok_or(Error::InvalidToken)
     .map(|row| (row.mfa_secret.map(Into::into), row.valid_until, row.user_id))?;
 
-    if let Some(secret) = secret {
-        if chrono::Local::now() > valid_until {
-            Err(Error::ExpiredToken)
-        } else if verify_totp(otp, &secret) {
-            Ok(user_id)
-        } else {
-            Err(Error::InvalidOtp)
-        }
+    let secret = secret.ok_or(Error::MfaDisabled)?;
+
+    if chrono::Local::now() > valid_until {
+        Err(Error::ExpiredToken)
+    } else if verify_totp(otp, &secret) {
+        Ok(user_id)
     } else {
-        // something has gone very wrong...
-        Err(Error::InvalidSecret)
+        Err(Error::InvalidOtp(mfa_challenge(user_id, pool).await?))
     }
 }
 

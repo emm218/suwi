@@ -26,7 +26,9 @@ use uuid::Uuid;
 use crate::{spawn_blocking_with_tracing, Settings};
 
 pub mod mfa;
-pub use mfa::verify_mfa_challenge;
+pub use mfa::verify_mfa_attempt;
+
+use self::mfa::Token as MfaToken;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
@@ -97,7 +99,7 @@ pub enum SignInError {
     #[error("invalid credentials")]
     InvalidCredentials,
     #[error("need otp")]
-    MfaNeeded(Uuid),
+    MfaNeeded(MfaToken),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]

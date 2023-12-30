@@ -65,6 +65,7 @@ impl DatabaseSettings {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub endpoint: EndpointSettings,
     pub database: DatabaseSettings,
@@ -93,14 +94,7 @@ impl Default for Settings {
 }
 
 pub fn get_config(path: Option<PathBuf>) -> Result<Settings, config::ConfigError> {
-    let mut builder = config::Config::builder()
-        .set_default("endpoint.port", 8000)?
-        .set_default("endpoint.host", "127.0.0.1")?
-        .set_default("database.port", 5432)?
-        .set_default("database.host", "127.0.0.1")?
-        .set_default("database.username", "postgres")?
-        .set_default("database.name", "suwi")?
-        .set_default("application.username_limit", 100)?;
+    let mut builder = config::Config::builder();
 
     builder = if let Some(path) = path {
         builder.add_source(config::File::from(path))

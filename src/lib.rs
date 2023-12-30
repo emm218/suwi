@@ -24,8 +24,14 @@ use axum::{
     routing::post,
     Form, Json, RequestExt,
 };
+use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use serde_with::{
+    base64::{Base64, Standard},
+    formats::Unpadded,
+    serde_as,
+};
 use sqlx::PgPool;
 use std::{io, sync::Arc};
 use tokio::{
@@ -34,12 +40,13 @@ use tokio::{
 };
 use tower_http::trace::TraceLayer;
 use tracing::{instrument, Span};
-use uuid::Uuid;
 
 mod accounts;
 
 use accounts::{
-    create_account, mfa::Error as MfaError, CreateError as AccountCreateError, SignInError,
+    create_account,
+    mfa::{Error as MfaError, Token as MfaToken},
+    CreateError as AccountCreateError, SignInError,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -117,14 +124,16 @@ async fn sign_up_handler(
     create_account(&username, &password, &pool, settings.as_ref()).await
 }
 
+#[serde_as]
+#[derive(Serialize)]
+struct MfaResponse {
+    reason: &'static str,
+    #[serde_as(as = "Base64<Standard, Unpadded>")]
+    token: MfaToken,
+}
+
 impl IntoResponse for SignInError {
     fn into_response(self) -> Response {
-        #[derive(Serialize)]
-        struct MfaResponse {
-            reason: &'static str,
-            token: Uuid,
-        }
-
         match self {
             Self::InvalidCredentials => (
                 StatusCode::BAD_REQUEST,
@@ -153,13 +162,21 @@ async fn sign_in_handler(
 ) -> Result<String, SignInError> {
     let id = accounts::verify_credentials(&username, password, &pool).await?;
 
-    Ok(id.to_string())
+    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
 }
 
 impl IntoResponse for MfaError {
     fn into_response(self) -> Response {
         match self {
             Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Self::InvalidOtp(token) => (
+                StatusCode::BAD_REQUEST,
+                Json(MfaResponse {
+                    reason: "invalid otp",
+                    token,
+                }),
+            )
+                .into_response(),
             _ => (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -171,11 +188,12 @@ impl IntoResponse for MfaError {
     }
 }
 
-// TODO: needs a better name
+#[serde_as]
 #[derive(Debug, Deserialize)]
 pub struct MfaInfo {
     pub otp: SecretString,
-    pub token: Uuid,
+    #[serde_as(as = "Base64<Standard, Unpadded>")]
+    pub token: MfaToken,
 }
 
 #[instrument(err, skip(pool))]
@@ -183,9 +201,9 @@ async fn verify_mfa_handler(
     State((pool, _)): SuwiState,
     JsonOrForm(MfaInfo { otp, token }): JsonOrForm<MfaInfo>,
 ) -> Result<String, MfaError> {
-    let id = accounts::verify_mfa_challenge(&otp, &token, &pool).await?;
+    let id = accounts::verify_mfa_attempt(&otp, &token, &pool).await?;
 
-    Ok(id.to_string())
+    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
 }
 
 pub async fn run(listener: TcpListener, pool: PgPool, settings: Settings) -> io::Result<()> {
