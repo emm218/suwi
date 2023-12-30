@@ -1,3 +1,5 @@
+use std::fmt::{self, Display};
+
 /* suwi - a rust activitypub server
  * Copyright (C) 2023 Emmy Emmycelium
  *
@@ -21,9 +23,9 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("mfa token has expired")]
+    #[error("mfa token expired, please try again")]
     ExpiredToken,
-    #[error("invalid otp")]
+    #[error("incorrect otp")]
     InvalidOtp(Token),
     #[error("invalid mfa token")]
     InvalidToken,

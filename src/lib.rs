@@ -15,23 +15,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #![feature(let_chains)]
+#![feature(async_closure)]
 
-use axum::{
-    async_trait,
-    extract::{FromRequest, Request, State},
-    http::{header::CONTENT_TYPE, StatusCode},
-    response::{IntoResponse, Response},
-    routing::post,
-    Form, Json, RequestExt,
-};
-use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
-use secrecy::SecretString;
+use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
-use serde_with::{
-    base64::{Base64, Standard},
-    formats::Unpadded,
-    serde_as,
-};
 use sqlx::PgPool;
 use std::{io, sync::Arc};
 use tokio::{
@@ -39,15 +26,14 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
 };
 use tower_http::trace::TraceLayer;
-use tracing::{instrument, Span};
+use tracing::Span;
+use web::{
+    accounts::{sign_in_handler, sign_in_page, sign_up_handler, sign_up_page},
+    mfa::verify_mfa_handler,
+};
 
 mod accounts;
-
-use accounts::{
-    create_account,
-    mfa::{Error as MfaError, Token as MfaToken},
-    CreateError as AccountCreateError, SignInError,
-};
+mod web;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -63,161 +49,13 @@ impl Default for Settings {
     }
 }
 
-type SuwiState = axum::extract::State<(PgPool, Arc<Settings>)>;
-
-struct JsonOrForm<T>(T);
-
-#[async_trait]
-impl<S, T> FromRequest<S> for JsonOrForm<T>
-where
-    S: Send + Sync,
-    Json<T>: FromRequest<()>,
-    Form<T>: FromRequest<()>,
-    T: 'static,
-{
-    type Rejection = Response;
-
-    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
-        let content_type = req
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok());
-
-        if let Some(content_type) = content_type {
-            if content_type.starts_with("application/json") {
-                let Json(payload) = req.extract().await.map_err(IntoResponse::into_response)?;
-                return Ok(Self(payload));
-            }
-
-            if content_type.starts_with("application/x-www-form-urlencoded") {
-                let Form(payload) = req.extract().await.map_err(IntoResponse::into_response)?;
-                return Ok(Self(payload));
-            }
-        }
-        Err(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Credentials {
-    pub username: String,
-    pub password: SecretString,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    reason: String,
-}
-
-impl IntoResponse for AccountCreateError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::UsernameTaken | Self::InvalidUsername(_) => (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    reason: self.to_string(),
-                }),
-            )
-                .into_response(),
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
-    }
-}
-
-#[instrument(err, skip(pool, settings))]
-async fn sign_up_handler(
-    State((pool, settings)): SuwiState,
-    JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
-) -> Result<(), AccountCreateError> {
-    create_account(&username, &password, &pool, settings.as_ref()).await
-}
-
-#[serde_as]
-#[derive(Serialize)]
-struct MfaResponse {
-    reason: &'static str,
-    #[serde_as(as = "Base64<Standard, Unpadded>")]
-    token: MfaToken,
-}
-
-impl IntoResponse for SignInError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::InvalidCredentials => (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    reason: self.to_string(),
-                }),
-            )
-                .into_response(),
-            Self::MfaNeeded(token) => (
-                StatusCode::BAD_REQUEST,
-                Json(MfaResponse {
-                    reason: "mfa needed",
-                    token,
-                }),
-            )
-                .into_response(),
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
-    }
-}
-
-#[instrument(err, skip(pool))]
-async fn sign_in_handler(
-    State((pool, _)): SuwiState,
-    JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
-) -> Result<String, SignInError> {
-    let id = accounts::verify_credentials(&username, password, &pool).await?;
-
-    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
-}
-
-impl IntoResponse for MfaError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            Self::InvalidOtp(token) => (
-                StatusCode::BAD_REQUEST,
-                Json(MfaResponse {
-                    reason: "invalid otp",
-                    token,
-                }),
-            )
-                .into_response(),
-            _ => (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    reason: self.to_string(),
-                }),
-            )
-                .into_response(),
-        }
-    }
-}
-
-#[serde_as]
-#[derive(Debug, Deserialize)]
-pub struct MfaInfo {
-    pub otp: SecretString,
-    #[serde_as(as = "Base64<Standard, Unpadded>")]
-    pub token: MfaToken,
-}
-
-#[instrument(err, skip(pool))]
-async fn verify_mfa_handler(
-    State((pool, _)): SuwiState,
-    JsonOrForm(MfaInfo { otp, token }): JsonOrForm<MfaInfo>,
-) -> Result<String, MfaError> {
-    let id = accounts::verify_mfa_attempt(&otp, &token, &pool).await?;
-
-    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
-}
-
 pub async fn run(listener: TcpListener, pool: PgPool, settings: Settings) -> io::Result<()> {
     let app = axum::Router::new()
-        .route("/sign_up", post(sign_up_handler))
-        .route("/sign_in", post(sign_in_handler))
+        .route("/sign_up", get(sign_up_page).post(sign_up_handler))
+        .route(
+            "/sign_in",
+            get(async || sign_in_page::<&str>(None)).post(sign_in_handler),
+        )
         .route("/verify_mfa", post(verify_mfa_handler))
         .with_state((pool, Arc::new(settings)))
         .layer(TraceLayer::new_for_http());
