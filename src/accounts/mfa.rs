@@ -1,5 +1,6 @@
 use std::fmt::{self, Display};
 
+use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 /* suwi - a rust activitypub server
  * Copyright (C) 2023 Emmy Emmycelium
  *
@@ -56,6 +57,12 @@ impl TryFrom<Vec<u8>> for Token {
 impl AsRef<[u8]> for Token {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&BASE64_STD_NO_PAD.encode(self))
     }
 }
 

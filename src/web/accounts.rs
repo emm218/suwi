@@ -1,11 +1,9 @@
-use std::fmt::Display;
-
 use axum::{
     extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Redirect, Response},
-    Json,
+    http::{header::SET_COOKIE, StatusCode},
+    response::{AppendHeaders, IntoResponse, Redirect, Response},
 };
+use axum_extra::extract::{cookie::Cookie, CookieJar};
 use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 use maud::{html, Markup};
 use secrecy::SecretString;
@@ -22,7 +20,7 @@ use crate::accounts::{
     SignInError,
 };
 
-use super::{mfa::mfa_page, JsonOrForm, SuwiState};
+use super::{JsonOrForm, SuwiState};
 
 #[derive(Debug, Deserialize)]
 pub struct Credentials {
@@ -38,13 +36,9 @@ struct ErrorResponse {
 impl IntoResponse for AccountCreateError {
     fn into_response(self) -> Response {
         match self {
-            Self::UsernameTaken | Self::InvalidUsername(_) => (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    reason: self.to_string(),
-                }),
-            )
-                .into_response(),
+            Self::UsernameTaken | Self::InvalidCredentials(_) => {
+                sign_up_page(Some(self.to_string().as_str())).into_response()
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -60,20 +54,33 @@ pub async fn sign_up_handler(
     Ok(Redirect::to("/sign_in"))
 }
 
-pub async fn sign_up_page() -> Markup {
+pub fn sign_up_page(error_msg: Option<&str>) -> Markup {
     html! {
+        (super::header())
+        h1 { "Sign up" }
+        @if let Some(msg) = error_msg {
+            p class="flash" {(msg)}
+        }
         form action="/sign_up" method="post" {
-            label for="username" { "username" }
+            label for="username" { "Username" }
             br;
             input type="text" name="username";
             br;
-            label for="password" { "password" }
+            label for="password" { "Password" }
             br;
             input type="password" name="password";
             br;
-            input type="submit" value="submit";
+            input type="submit" value="Submit";
         }
     }
+}
+
+pub async fn get_sign_up_handler(jar: CookieJar) -> (CookieJar, Markup) {
+    let error = jar.get("error").map(Cookie::value);
+
+    let page = sign_up_page(error);
+
+    (jar.remove("error"), page)
 }
 
 #[serde_as]
@@ -87,8 +94,14 @@ struct MfaResponse {
 impl IntoResponse for SignInError {
     fn into_response(self) -> Response {
         match self {
-            Self::InvalidCredentials => sign_in_page(Some(self)).into_response(),
-            Self::MfaNeeded(token) => mfa_page(&token, None).into_response(),
+            Self::InvalidCredentials => {
+                sign_in_page(Some(self.to_string().as_str())).into_response()
+            }
+            Self::MfaNeeded(token) => (
+                AppendHeaders([(SET_COOKIE, format!("token={token}"))]),
+                Redirect::to("/verify_mfa"),
+            )
+                .into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -104,21 +117,31 @@ pub async fn sign_in_handler(
     Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
 }
 
-pub fn sign_in_page<E: Display>(flash: Option<E>) -> Markup {
+pub fn sign_in_page(error_msg: Option<&str>) -> Markup {
     html! {
-        @if let Some(msg) = flash {
+        (super::header())
+        h1 { "Sign in" }
+        @if let Some(msg) = error_msg {
             p class="flash" {(msg)}
         }
         form action="/sign_in" method="post" {
-            label for="username" { "username" }
+            label for="username" { "Username" }
             br;
             input type="text" name="username";
             br;
-            label for="password" { "password" }
+            label for="password" { "Password" }
             br;
             input type="password" name="password";
             br;
-            input type="submit" value="submit";
+            input type="submit" value="Submit";
         }
     }
+}
+
+pub async fn get_sign_in_handler(jar: CookieJar) -> (CookieJar, Markup) {
+    let error = jar.get("error").map(Cookie::value);
+
+    let page = sign_in_page(error);
+
+    (jar.remove("error"), page)
 }

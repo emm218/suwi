@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     Form, Json, RequestExt,
 };
+use maud::{html, Markup};
 use sqlx::PgPool;
 
 use crate::Settings;
@@ -46,5 +47,11 @@ where
             }
         }
         Err(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())
+    }
+}
+
+fn header() -> Markup {
+    html! {
+        link rel="stylesheet" href="/assets/style.css";
     }
 }

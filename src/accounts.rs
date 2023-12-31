@@ -35,7 +35,7 @@ pub enum CreateError {
     #[error("username already taken")]
     UsernameTaken,
     #[error("{0}")]
-    InvalidUsername(String),
+    InvalidCredentials(String),
     #[error(transparent)]
     PasswordHash(#[from] password_hash::Error),
     #[error(transparent)]
@@ -68,13 +68,19 @@ pub async fn create_account(
     settings: &Settings,
 ) -> Result<(), CreateError> {
     if username.is_empty() {
-        return Err(CreateError::InvalidUsername(
+        return Err(CreateError::InvalidCredentials(
             "username cannot be empty".to_string(),
         ));
     }
 
+    if password.expose_secret().is_empty() {
+        return Err(CreateError::InvalidCredentials(
+            "password cannot be empty".to_string(),
+        ));
+    }
+
     if username.len() > settings.username_limit {
-        return Err(CreateError::InvalidUsername(format!(
+        return Err(CreateError::InvalidCredentials(format!(
             "username cannot be over {} characters",
             settings.username_limit
         )));
@@ -96,7 +102,7 @@ pub async fn create_account(
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignInError {
-    #[error("invalid credentials")]
+    #[error("incorrect username or password")]
     InvalidCredentials,
     #[error("need otp")]
     MfaNeeded(MfaToken),

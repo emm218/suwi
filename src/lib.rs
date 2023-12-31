@@ -17,7 +17,7 @@
 #![feature(let_chains)]
 #![feature(async_closure)]
 
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::{io, sync::Arc};
@@ -25,11 +25,11 @@ use tokio::{
     net::TcpListener,
     task::{spawn_blocking, JoinHandle},
 };
-use tower_http::trace::TraceLayer;
+use tower_http::{services::fs::ServeDir, trace::TraceLayer};
 use tracing::Span;
 use web::{
-    accounts::{sign_in_handler, sign_in_page, sign_up_handler, sign_up_page},
-    mfa::verify_mfa_handler,
+    accounts::{get_sign_in_handler, get_sign_up_handler, sign_in_handler, sign_up_handler},
+    mfa::{mfa_get_handler, verify_mfa_handler},
 };
 
 mod accounts;
@@ -51,13 +51,11 @@ impl Default for Settings {
 
 pub async fn run(listener: TcpListener, pool: PgPool, settings: Settings) -> io::Result<()> {
     let app = axum::Router::new()
-        .route("/sign_up", get(sign_up_page).post(sign_up_handler))
-        .route(
-            "/sign_in",
-            get(async || sign_in_page::<&str>(None)).post(sign_in_handler),
-        )
-        .route("/verify_mfa", post(verify_mfa_handler))
+        .route("/sign_up", get(get_sign_up_handler).post(sign_up_handler))
+        .route("/sign_in", get(get_sign_in_handler).post(sign_in_handler))
+        .route("/verify_mfa", get(mfa_get_handler).post(verify_mfa_handler))
         .with_state((pool, Arc::new(settings)))
+        .nest_service("/assets", ServeDir::new("assets"))
         .layer(TraceLayer::new_for_http());
 
     axum::serve(listener, app).await
