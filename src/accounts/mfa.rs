@@ -18,7 +18,7 @@ use secrecy::{Secret, SecretString};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::fmt::{self, Display};
-use uuid::{serde::compact, Uuid};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,7 +35,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Token(#[serde(with = "compact")] Uuid);
+pub struct Token(Uuid);
 
 impl From<Uuid> for Token {
     fn from(id: Uuid) -> Self {
