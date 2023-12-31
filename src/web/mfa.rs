@@ -1,33 +1,41 @@
+/* suwi - a rust activitypub server
+ * Copyright (C) 2023 Emmy Emmycelium
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::{cookie::Cookie, CookieJar};
-use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 use maud::{html, Markup};
 use secrecy::SecretString;
 use serde::Deserialize;
-use serde_with::{
-    base64::{Base64, Standard},
-    formats::Unpadded,
-    serde_as,
-};
 use tracing::instrument;
 
+use super::{JsonOrForm, SuwiState};
 use crate::accounts::{
-    mfa::{Error as MfaError, Token as MfaToken},
+    mfa::{Error as MfaError, Token},
     verify_mfa_attempt,
 };
-
-use super::{JsonOrForm, SuwiState};
 
 impl IntoResponse for MfaError {
     fn into_response(self) -> Response {
         match &self {
             Self::InvalidOtp(token) => {
-                mfa_page(token.to_string().as_str(), Some(self.to_string().as_str()))
-                    .into_response()
+                page(token.to_string().as_str(), Some(self.to_string().as_str())).into_response()
             }
             Self::ExpiredToken | Self::InvalidToken | Self::InvalidSecret => (
                 AppendHeaders([(SET_COOKIE, format!("error={self}"))]),
@@ -39,25 +47,23 @@ impl IntoResponse for MfaError {
     }
 }
 
-#[serde_as]
 #[derive(Debug, Deserialize)]
-pub struct MfaAttempt {
+pub struct Attempt {
     pub otp: SecretString,
-    #[serde_as(as = "Base64<Standard, Unpadded>")]
-    pub token: MfaToken,
+    pub token: Token,
 }
 
 #[instrument(err, skip(pool))]
-pub async fn verify_mfa_handler(
+pub async fn verify(
     State((pool, _)): SuwiState,
-    JsonOrForm(MfaAttempt { otp, token }): JsonOrForm<MfaAttempt>,
+    JsonOrForm(Attempt { otp, token }): JsonOrForm<Attempt>,
 ) -> Result<String, MfaError> {
-    let id = verify_mfa_attempt(&otp, &token, &pool).await?;
-
-    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
+    verify_mfa_attempt(&otp, &token, &pool)
+        .await
+        .map(|id| id.to_string())
 }
 
-pub fn mfa_page(token: &str, error_msg: Option<&str>) -> Markup {
+fn page(token: &str, error_msg: Option<&str>) -> Markup {
     html! {
         (super::header())
         h1 { "Sign in" }
@@ -75,13 +81,13 @@ pub fn mfa_page(token: &str, error_msg: Option<&str>) -> Markup {
     }
 }
 
-pub async fn mfa_get_handler(jar: CookieJar) -> Result<(CookieJar, Markup), Response> {
+pub async fn get(jar: CookieJar) -> Result<(CookieJar, Markup), Response> {
     let token = jar
         .get("token")
         .ok_or(StatusCode::BAD_REQUEST.into_response())?
         .value();
 
-    let page = mfa_page(token, None);
+    let page = page(token, None);
 
     Ok((jar.remove(Cookie::from("token")), page))
 }

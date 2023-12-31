@@ -28,8 +28,8 @@ use tokio::{
 use tower_http::{services::fs::ServeDir, trace::TraceLayer};
 use tracing::Span;
 use web::{
-    accounts::{get_sign_in_handler, get_sign_up_handler, sign_in_handler, sign_up_handler},
-    mfa::{mfa_get_handler, verify_mfa_handler},
+    accounts::{get_sign_in, get_sign_up, sign_in, sign_up},
+    mfa::{get as get_mfa, verify as verify_mfa},
 };
 
 mod accounts;
@@ -51,9 +51,9 @@ impl Default for Settings {
 
 pub async fn run(listener: TcpListener, pool: PgPool, settings: Settings) -> io::Result<()> {
     let app = axum::Router::new()
-        .route("/sign_up", get(get_sign_up_handler).post(sign_up_handler))
-        .route("/sign_in", get(get_sign_in_handler).post(sign_in_handler))
-        .route("/verify_mfa", get(mfa_get_handler).post(verify_mfa_handler))
+        .route("/sign_up", get(get_sign_up).post(sign_up))
+        .route("/sign_in", get(get_sign_in).post(sign_in))
+        .route("/verify_mfa", get(get_mfa).post(verify_mfa))
         .with_state((pool, Arc::new(settings)))
         .nest_service("/assets", ServeDir::new("assets"))
         .layer(TraceLayer::new_for_http());

@@ -1,6 +1,3 @@
-use std::fmt::{self, Display};
-
-use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 /* suwi - a rust activitypub server
  * Copyright (C) 2023 Emmy Emmycelium
  *
@@ -20,7 +17,8 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engi
 use secrecy::{Secret, SecretString};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use uuid::Uuid;
+use std::fmt::{self, Display};
+use uuid::{serde::compact, Uuid};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -37,7 +35,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Token(Uuid);
+pub struct Token(#[serde(with = "compact")] Uuid);
 
 impl From<Uuid> for Token {
     fn from(id: Uuid) -> Self {
@@ -45,28 +43,13 @@ impl From<Uuid> for Token {
     }
 }
 
-impl TryFrom<Vec<u8>> for Token {
-    type Error = uuid::Error;
-
-    fn try_from(mut bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        bytes.resize(16, 0);
-        Uuid::from_slice(&bytes[..16]).map(Into::into)
-    }
-}
-
-impl AsRef<[u8]> for Token {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
 impl Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&BASE64_STD_NO_PAD.encode(self))
+        self.0.simple().fmt(f)
     }
 }
 
-pub async fn mfa_challenge(user: Uuid, pool: &PgPool) -> Result<Token, sqlx::Error> {
+pub async fn challenge(user: Uuid, pool: &PgPool) -> Result<Token, sqlx::Error> {
     sqlx::query_scalar!(
         "INSERT INTO mfa_tokens (user_id, valid_until)
         VALUES ($1, now() + interval '30 minutes') RETURNING id;",
@@ -77,7 +60,7 @@ pub async fn mfa_challenge(user: Uuid, pool: &PgPool) -> Result<Token, sqlx::Err
     .map(Into::into)
 }
 
-pub async fn verify_mfa_attempt(
+pub async fn verify_attempt(
     otp: &SecretString,
     Token(token): &Token,
     pool: &PgPool,
@@ -100,7 +83,7 @@ pub async fn verify_mfa_attempt(
     } else if verify_totp(otp, &secret) {
         Ok(user_id)
     } else {
-        Err(Error::InvalidOtp(mfa_challenge(user_id, pool).await?))
+        Err(Error::InvalidOtp(challenge(user_id, pool).await?))
     }
 }
 

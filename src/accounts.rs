@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::{spawn_blocking_with_tracing, Settings};
 
 pub mod mfa;
-pub use mfa::verify_mfa_attempt;
+pub use mfa::verify_attempt as verify_mfa_attempt;
 
 use self::mfa::Token as MfaToken;
 
@@ -173,9 +173,7 @@ pub async fn verify_credentials(
     let user_id = user_id.ok_or(SignInError::InvalidCredentials)?;
 
     if mfa_enabled {
-        Err(SignInError::MfaNeeded(
-            mfa::mfa_challenge(user_id, pool).await?,
-        ))
+        Err(SignInError::MfaNeeded(mfa::challenge(user_id, pool).await?))
     } else {
         Ok(user_id)
     }

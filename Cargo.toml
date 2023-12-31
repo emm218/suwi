@@ -17,7 +17,6 @@ anyhow = { version = "1.0.77", features = ["backtrace"] }
 argon2 = { version = "0.5.2", features = ["std"] }
 axum = { version = "0.7.2", features = ["http2"] }
 axum-extra = { version = "0.9.1", features = ["cookie"] }
-base64 = "0.21.5"
 chrono = "0.4.31"
 clap = { version = "4.4.11", features = ["derive"] }
 config = "0.13.4"
@@ -25,7 +24,6 @@ maud = { git= "https://github.com/lambda-fairy/maud", features = ["axum"] }
 rand = "0.8.5"
 secrecy = { version = "0.8.0", features = ["serde"] }
 serde = { version = "1.0.193", features = ["derive"] }
-serde_with = { version = "3.4.0", features = ["base64"] }
 serde_yaml = "0.9.29"
 thiserror = "1.0.52"
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros"] }

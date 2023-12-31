@@ -1,26 +1,35 @@
+/* suwi - a rust activitypub server
+ * Copyright (C) 2023 Emmy Emmycelium
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::{cookie::Cookie, CookieJar};
-use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_STD_NO_PAD, Engine};
 use maud::{html, Markup};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use serde_with::{
-    base64::{Base64, Standard},
-    formats::Unpadded,
-    serde_as,
-};
 use tracing::instrument;
 
+use super::{JsonOrForm, SuwiState};
 use crate::accounts::{
     create_account, mfa::Token as MfaToken, verify_credentials, CreateError as AccountCreateError,
     SignInError,
 };
-
-use super::{JsonOrForm, SuwiState};
 
 #[derive(Debug, Deserialize)]
 pub struct Credentials {
@@ -45,7 +54,7 @@ impl IntoResponse for AccountCreateError {
 }
 
 #[instrument(err, skip(pool, settings))]
-pub async fn sign_up_handler(
+pub async fn sign_up(
     State((pool, settings)): SuwiState,
     JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
 ) -> Result<Redirect, AccountCreateError> {
@@ -54,7 +63,7 @@ pub async fn sign_up_handler(
     Ok(Redirect::to("/sign_in"))
 }
 
-pub fn sign_up_page(error_msg: Option<&str>) -> Markup {
+fn sign_up_page(error_msg: Option<&str>) -> Markup {
     html! {
         (super::header())
         h1 { "Sign up" }
@@ -75,7 +84,7 @@ pub fn sign_up_page(error_msg: Option<&str>) -> Markup {
     }
 }
 
-pub async fn get_sign_up_handler(jar: CookieJar) -> (CookieJar, Markup) {
+pub async fn get_sign_up(jar: CookieJar) -> (CookieJar, Markup) {
     let error = jar.get("error").map(Cookie::value);
 
     let page = sign_up_page(error);
@@ -83,11 +92,9 @@ pub async fn get_sign_up_handler(jar: CookieJar) -> (CookieJar, Markup) {
     (jar.remove("error"), page)
 }
 
-#[serde_as]
 #[derive(Serialize)]
 struct MfaResponse {
     reason: &'static str,
-    #[serde_as(as = "Base64<Standard, Unpadded>")]
     token: MfaToken,
 }
 
@@ -108,16 +115,16 @@ impl IntoResponse for SignInError {
 }
 
 #[instrument(err, skip(pool))]
-pub async fn sign_in_handler(
+pub async fn sign_in(
     State((pool, _)): SuwiState,
     JsonOrForm(Credentials { username, password }): JsonOrForm<Credentials>,
 ) -> Result<String, SignInError> {
-    let id = verify_credentials(&username, password, &pool).await?;
-
-    Ok(BASE64_STD_NO_PAD.encode(id.as_bytes()))
+    verify_credentials(&username, password, &pool)
+        .await
+        .map(|id| id.to_string())
 }
 
-pub fn sign_in_page(error_msg: Option<&str>) -> Markup {
+fn sign_in_page(error_msg: Option<&str>) -> Markup {
     html! {
         (super::header())
         h1 { "Sign in" }
@@ -138,7 +145,7 @@ pub fn sign_in_page(error_msg: Option<&str>) -> Markup {
     }
 }
 
-pub async fn get_sign_in_handler(jar: CookieJar) -> (CookieJar, Markup) {
+pub async fn get_sign_in(jar: CookieJar) -> (CookieJar, Markup) {
     let error = jar.get("error").map(Cookie::value);
 
     let page = sign_in_page(error);
